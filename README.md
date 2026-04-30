@@ -13,7 +13,7 @@ The Python sample under [`src/`](./src/) works against either.
 
 ## Prerequisites
 
-- An Azure subscription [eligible to deploy Claude in Foundry](https://learn.microsoft.com/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude#prerequisites), with `Contributor` on the target subscription/resource group.
+- An Azure subscription [eligible to deploy Claude in Foundry](https://learn.microsoft.com/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude#prerequisites), with `Contributor` on the target subscription/resource group (see [Required permissions](#required-permissions) for the full breakdown, including the data-plane role you need to call the model).
 - Region: `eastus2` or `swedencentral` (or `westus2` for `claude-opus-*`).
 - Tools: [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), [azd](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd), Python ≥ 3.10, and [Terraform](https://developer.hashicorp.com/terraform/install) ≥ 1.6 (Terraform variant only).
 
@@ -138,8 +138,7 @@ The Terraform variant uses `azapi_resource` for both the Foundry account and the
 
 </details>
 
-<details>
-<summary><strong>Required permissions</strong></summary>
+## Required permissions
 
 | Action | Role | Scope |
 |---|---|---|
@@ -158,8 +157,6 @@ If you do not have `Microsoft.Authorization/roleAssignments/write`, leave `ASSIG
 | `Azure AI Developer` | includes `Microsoft.CognitiveServices/accounts/MaaS/*` | Sufficient for Claude because Claude routes through the **MaaS** data path as a partner/marketplace model. (It is **not** sufficient for first-party Foundry models that route through `accounts/AIServices/*`.) |
 
 > The role `Azure AI Developer` was historically called out as *insufficient* for Foundry inference. That guidance still applies to first-party `AIServices` models, but Claude/Anthropic deployments dispatch through `Microsoft.CognitiveServices/accounts/MaaS/*`, which `Azure AI Developer` already grants. Verified against `claude-sonnet-4-6` on `2025-10-01-preview`.
-
-</details>
 
 ## References
 

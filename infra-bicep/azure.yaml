@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: claude-foundry-starter
+metadata:
+  template: claude-foundry-starter-bicep@0.1.0
+infra:
+  provider: bicep
+  path: infra
+  module: main
+hooks:
+  preprovision:
+    windows:
+      shell: pwsh
+      run: |
+        if (-not $env:CLAUDE_ORGANIZATION_NAME) {
+          Write-Error "CLAUDE_ORGANIZATION_NAME is required. Run: azd env set CLAUDE_ORGANIZATION_NAME 'Your Org'"
+          exit 1
+        }
+    posix:
+      shell: sh
+      run: |
+        if [ -z "$CLAUDE_ORGANIZATION_NAME" ]; then
+          echo "CLAUDE_ORGANIZATION_NAME is required. Run: azd env set CLAUDE_ORGANIZATION_NAME 'Your Org'"
+          exit 1
+        fi

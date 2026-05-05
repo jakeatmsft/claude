@@ -1,12 +1,16 @@
-"""Streaming chat loop against a Claude deployment in Microsoft Foundry."""
+"""Streaming chat loop against a Claude deployment in Microsoft Foundry.
+
+The Entra ID token is captured once at startup and is valid for ~1 hour. If
+your chat session lasts longer, see hello_claude_token_refresh.py.
+"""
 
 from __future__ import annotations
 
 import os
 import sys
 
-from anthropic import AnthropicFoundry
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from anthropic import Anthropic
+from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
 
@@ -15,7 +19,7 @@ SYSTEM_PROMPT = (
 )
 
 
-def build_client() -> tuple[AnthropicFoundry, str]:
+def build_client() -> tuple[Anthropic, str]:
     load_dotenv(".env.local", override=False)
     load_dotenv(".env", override=False)
 
@@ -28,12 +32,10 @@ def build_client() -> tuple[AnthropicFoundry, str]:
         )
         sys.exit(1)
 
-    token_provider = get_bearer_token_provider(
-        DefaultAzureCredential(), "https://ai.azure.com/.default"
-    )
-    return AnthropicFoundry(
-        azure_ad_token_provider=token_provider, base_url=base_url
-    ), deployment
+    token = DefaultAzureCredential().get_token(
+        "https://ai.azure.com/.default"
+    ).token
+    return Anthropic(auth_token=token, base_url=base_url), deployment
 
 
 def main() -> None:

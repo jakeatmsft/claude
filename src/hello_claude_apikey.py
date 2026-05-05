@@ -3,10 +3,9 @@
 Useful when the deployer lacks the 'Azure AI User' data-plane role for Entra ID
 auth. For production, prefer the Entra ID flow in src/hello_claude.py.
 
-Note: this uses the plain `Anthropic` client (not `AnthropicFoundry`). For
-API-key auth, the Foundry endpoint accepts the standard `x-api-key` header,
-so the Foundry-specific client adds nothing here. `AnthropicFoundry` is only
-required when authenticating with Entra ID via `azure_ad_token_provider`.
+Note: this uses the plain `Anthropic` client. For API-key auth, the Foundry
+endpoint accepts the standard `x-api-key` header, so nothing Foundry-specific
+is needed here.
 """
 
 from __future__ import annotations

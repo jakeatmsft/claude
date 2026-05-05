@@ -1,5 +1,7 @@
 # Claude on Microsoft Foundry — Starter
 
+> Short link: **<https://aka.ms/claude/start>**
+
 Provision a [Microsoft Foundry](https://learn.microsoft.com/azure/ai-foundry/) account with a **Claude** model deployment, then call it with the **[Claude SDK](https://docs.claude.com/en/api/client-sdks)** using Microsoft Entra ID — end-to-end via [Azure Developer CLI (`azd`)](https://learn.microsoft.com/azure/developer/azure-developer-cli/).
 
 Two equivalent IaC variants ship side-by-side. Pick one and `azd up`:
@@ -69,15 +71,17 @@ python src/hello_claude_apikey.py
 
 ## SDK call shape
 
-```python
-from anthropic import AnthropicFoundry
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+We use the plain `anthropic.Anthropic` client. The Entra ID token is captured once at startup and is valid for ~1 hour — fine for a one-shot script or a short-lived process. For long-running processes, see the [advanced section below](#advanced-long-running-processes-auto-refreshing-the-entra-id-token).
 
-token_provider = get_bearer_token_provider(
-    DefaultAzureCredential(), "https://ai.azure.com/.default"
-)
-client = AnthropicFoundry(
-    azure_ad_token_provider=token_provider,
+```python
+from anthropic import Anthropic
+from azure.identity import DefaultAzureCredential
+
+token = DefaultAzureCredential().get_token(
+    "https://ai.azure.com/.default"
+).token
+client = Anthropic(
+    auth_token=token,
     base_url="https://<resource>.services.ai.azure.com/anthropic",
 )
 msg = client.messages.create(
@@ -88,6 +92,31 @@ msg = client.messages.create(
 ```
 
 > Pass the **deployment name** (not the model id) as `model`. The SDK appends `/v1/messages` to the configured `base_url`.
+
+<details id="advanced-long-running-processes-auto-refreshing-the-entra-id-token">
+<summary><strong>Advanced: long-running processes (auto-refreshing the Entra ID token)</strong></summary>
+
+The plain `anthropic.Anthropic` client only accepts `auth_token: str | None`, so a captured token will start failing with `401 Unauthorized` after ~1 hour.
+
+For services, daemons, long batch jobs, or notebooks left open, use [src/hello_claude_token_refresh.py](./src/hello_claude_token_refresh.py). It defines a tiny `AnthropicIdentity(Anthropic)` subclass that overrides the `auth_token` property to call `azure.identity.get_bearer_token_provider(...)` per request, giving free per-request token refresh:
+
+```python
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+# AnthropicIdentity is defined in hello_claude_token_refresh.py
+from hello_claude_token_refresh import AnthropicIdentity
+
+token_provider = get_bearer_token_provider(
+    DefaultAzureCredential(), "https://ai.azure.com/.default"
+)
+client = AnthropicIdentity(
+    azure_ad_token_provider=token_provider,
+    base_url="https://<resource>.services.ai.azure.com/anthropic",
+)
+```
+
+If the Anthropic SDK ever accepts a callable for `auth_token`, this shim becomes unnecessary.
+
+</details>
 
 <details>
 <summary><strong>What gets deployed</strong></summary>
@@ -107,9 +136,10 @@ claude/
 ├── infra-bicep/        # azd template — Bicep variant
 ├── infra-terraform/    # azd template — Terraform variant
 ├── src/
-│   ├── hello_claude.py        # One-shot Messages call (Entra ID)
-│   ├── hello_claude_apikey.py # Same, but with an API key (dev/test only)
-│   └── chat_stream.py         # Streaming multi-turn chat loop
+│   ├── hello_claude.py               # One-shot Messages call (Entra ID)
+│   ├── hello_claude_apikey.py        # Same, but with an API key (dev/test only)
+│   ├── hello_claude_token_refresh.py # Long-running variant with auto-refreshing Entra token
+│   └── chat_stream.py                # Streaming multi-turn chat loop
 ├── Get-ClaudeRegions.ps1
 ├── requirements.txt
 └── .env.sample
@@ -125,6 +155,7 @@ claude/
 | `Project can only be created under AIServices Kind account with allowProjectManagement set to true` | Account property missing. Both variants here set it; check you didn't downgrade the API version. |
 | `404 Not Found` on inference | Base URL must end in `/anthropic` — `https://<resource>.services.ai.azure.com/anthropic`. |
 | `401 Unauthorized` | Token scope must be `https://ai.azure.com/.default`. Re-run `az login`. |
+| `401 Unauthorized` after ~1 hour of running | The Entra ID token captured at startup has expired. The plain `Anthropic` client doesn't auto-refresh — see the [advanced section](#advanced-long-running-processes-auto-refreshing-the-entra-id-token) for [src/hello_claude_token_refresh.py](./src/hello_claude_token_refresh.py), which uses an `AnthropicIdentity` shim to refresh per request. |
 | `403 Forbidden` | Missing a data-plane role on the Foundry account. Grant `Cognitive Services User`, `Azure AI User`, or `Azure AI Developer` (see permissions details below). |
 | `Region not available` | Deploy to `eastus2` or `swedencentral` (or `westus2` for opus-only). |
 | Subscription can't deploy Claude | Confirm subscription eligibility per the [official docs](https://learn.microsoft.com/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude#prerequisites). |

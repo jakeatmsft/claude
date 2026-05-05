@@ -5,6 +5,8 @@ Reads configuration from environment (or .env / .env.local):
     CLAUDE_DEPLOYMENT_NAME   the Foundry deployment name (NOT the model id)
 
 Auth: Microsoft Entra ID via DefaultAzureCredential. Run `az login` first.
+The token is captured once at startup and is valid for ~1 hour — fine for a
+one-shot script. For long-running processes, see hello_claude_token_refresh.py.
 """
 
 from __future__ import annotations
@@ -12,8 +14,8 @@ from __future__ import annotations
 import os
 import sys
 
-from anthropic import AnthropicFoundry
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from anthropic import Anthropic
+from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
 
@@ -32,14 +34,11 @@ def main() -> int:
         )
         return 1
 
-    token_provider = get_bearer_token_provider(
-        DefaultAzureCredential(), "https://ai.azure.com/.default"
-    )
+    token = DefaultAzureCredential().get_token(
+        "https://ai.azure.com/.default"
+    ).token
 
-    client = AnthropicFoundry(
-        azure_ad_token_provider=token_provider,
-        base_url=base_url,
-    )
+    client = Anthropic(auth_token=token, base_url=base_url)
 
     message = client.messages.create(
         model=deployment,

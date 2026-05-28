@@ -46,6 +46,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# When invoked via `pwsh -File ... -Regions a,b,c`, parameter binding can pass
+# the comma-joined string as a single element instead of an array. Normalize
+# any string that contains commas into its comma-split parts.
+$Regions = @(
+    foreach ($r in $Regions) {
+        if ($r -is [string] -and $r -match ',') {
+            $r.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+        } else {
+            $r
+        }
+    }
+)
+
 # Verify az login context
 try {
     $ctx = az account show -o json 2>$null | ConvertFrom-Json

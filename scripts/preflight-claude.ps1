@@ -5,30 +5,36 @@
 .DESCRIPTION
     Gates `azd up` on:
       1. Required env vars being set.
-      2. The Azure subscription having accepted the Anthropic commercial terms
-         for the requested Claude model, via the Microsoft.MarketplaceOrdering
-         REST API. This is the authoritative signal:
-         https://learn.microsoft.com/rest/api/marketplaceordering/marketplace-agreements/get
+      2. (Informational) Marketplace catalog: the Anthropic offer resolves
+         via the Microsoft.MarketplaceOrdering REST API. A missing offer
+         is a hard fail (typo / unreleased SKU). The Cognitive Services
+         RP auto-signs the agreement during deployment on eligible subs,
+         so an unsigned status is informational only.
+      3. **Per-region Cognitive Services quota headroom** per model.
+         A hard fail (exit 6) when `currentValue + requestedCapacity >
+         limit`. This is the most common cause of `azd up` failures and
+         the cause of the opaque `400 715-123420` error that Terraform's
+         `azapi_resource` returns. (Bicep / `az deployment group create`
+         surface the real `InsufficientQuota` message because they go
+         through ARM preflight; `azapi` bypasses it.)
 
-         Claude SKUs are published under publisher `anthropic` as
-         offer `anthropic-<model-name>-offer` / plan `anthropic-<model-name>-test-plan`.
-         A signed agreement has `properties.accepted == true`.
+    Per-family mode: set any of CLAUDE_HAIKU_MODEL / CLAUDE_SONNET_MODEL /
+    CLAUDE_OPUS_MODEL. Empty = skip that family. If all three are empty,
+    falls back to CLAUDE_MODEL_NAME (legacy single-model behavior).
 
-      3. (Informational) Per-region Cognitive Services quota headroom. A
-         warning, not a hard fail \u2014 quota currentValue is occasionally noisy
-         and the RP returns a precise error at deploy time if quota is short.
-
-    Designed to be invoked from the `preprovision` hook in `azure.yaml`.
-    Works on PowerShell 7+ on Windows, Linux, and macOS.
+    Env vars consumed:
+      CLAUDE_ORGANIZATION_NAME, AZURE_LOCATION, CLAUDE_HAIKU_MODEL,
+      CLAUDE_SONNET_MODEL, CLAUDE_OPUS_MODEL (+ matching *_CAPACITY),
+      CLAUDE_MODEL_NAME, CLAUDE_MODEL_CAPACITY (legacy fallback).
 
 .NOTES
     Exit codes:
       0  Preflight passed.
       1  A required env var is missing.
       2  Azure CLI / subscription not available.
-      3  Anthropic terms not accepted for this subscription/model.
-      4  Marketplace offer not found (typo in CLAUDE_MODEL_NAME, or model not
+      4  Marketplace offer not found (typo in a model name, or model not
          in the Anthropic-on-Foundry catalog yet).
+      6  Insufficient quota (used + requested > limit).
 #>
 
 [CmdletBinding()]
@@ -48,12 +54,23 @@ if (-not $env:CLAUDE_ORGANIZATION_NAME) {
     Fail 1 "CLAUDE_ORGANIZATION_NAME is required. Run: azd env set CLAUDE_ORGANIZATION_NAME 'Your Org'"
 }
 if (-not $env:AZURE_LOCATION) {
-    Fail 1 "AZURE_LOCATION is required. Run: azd env set AZURE_LOCATION eastus2"
+    Fail 1 "AZURE_LOCATION is required. Run: azd env set AZURE_LOCATION swedencentral"
 }
 
 $location = $env:AZURE_LOCATION
-$modelName = if ($env:CLAUDE_MODEL_NAME) { $env:CLAUDE_MODEL_NAME } else { "claude-sonnet-4-6" }
-$capacity = if ($env:CLAUDE_MODEL_CAPACITY) { [int]$env:CLAUDE_MODEL_CAPACITY } else { 50 }
+
+# Build the list of (family, model, capacity) tuples to validate. Empty
+# family vars are skipped. If none are set, fall back to legacy single-model.
+$requested = @()
+if ($env:CLAUDE_HAIKU_MODEL)  { $requested += [pscustomobject]@{ Family='haiku';  Model=$env:CLAUDE_HAIKU_MODEL;  Capacity=[int]($env:CLAUDE_HAIKU_CAPACITY  | ForEach-Object { if ($_) { $_ } else { 50 } }) } }
+if ($env:CLAUDE_SONNET_MODEL) { $requested += [pscustomobject]@{ Family='sonnet'; Model=$env:CLAUDE_SONNET_MODEL; Capacity=[int]($env:CLAUDE_SONNET_CAPACITY | ForEach-Object { if ($_) { $_ } else { 50 } }) } }
+if ($env:CLAUDE_OPUS_MODEL)   { $requested += [pscustomobject]@{ Family='opus';   Model=$env:CLAUDE_OPUS_MODEL;   Capacity=[int]($env:CLAUDE_OPUS_CAPACITY   | ForEach-Object { if ($_) { $_ } else { 50 } }) } }
+
+if ($requested.Count -eq 0) {
+    $legacyModel    = if ($env:CLAUDE_MODEL_NAME) { $env:CLAUDE_MODEL_NAME } else { "claude-sonnet-4-6" }
+    $legacyCapacity = if ($env:CLAUDE_MODEL_CAPACITY) { [int]$env:CLAUDE_MODEL_CAPACITY } else { 50 }
+    $requested = ,([pscustomobject]@{ Family='legacy'; Model=$legacyModel; Capacity=$legacyCapacity })
+}
 
 # --- 2. Azure CLI / active subscription ------------------------------------
 $az = Get-Command az -ErrorAction SilentlyContinue
@@ -66,30 +83,36 @@ if (-not $subId) {
     Fail 2 "No active Azure subscription. Run: az login   (and 'az account set --subscription <id>' if needed)"
 }
 
-Write-Host "Preflight: subscription $subId, location $location, model $modelName (capacity $capacity)"
+$summary = ($requested | ForEach-Object { "$($_.Family)=$($_.Model)@$($_.Capacity)" }) -join ', '
+Write-Host "Preflight: subscription $subId, location $location, deployments: $summary"
 
-# --- 3. Marketplace Ordering: authoritative terms-acceptance gate ----------
-# All current Anthropic-on-Foundry offers follow this naming convention.
-# If Anthropic ever publishes a new plan suffix (today: '-test-plan'), update here.
 $publisher = "anthropic"
-$offer     = "anthropic-$modelName-offer"
-$plan      = "anthropic-$modelName-test-plan"
-$mpUrl     = "https://management.azure.com/subscriptions/$subId/providers/Microsoft.MarketplaceOrdering/offerTypes/virtualmachine/publishers/$publisher/offers/$offer/plans/$plan/agreements/current?api-version=2021-01-01"
 
-$mpRaw = az rest --method get --url $mpUrl 2>&1
-$mpExit = $LASTEXITCODE
+foreach ($r in $requested) {
+    $modelName = $r.Model
+    $capacity  = $r.Capacity
+    $family    = $r.Family
 
-if ($mpExit -ne 0) {
-    # 400/404 from the RP \u2014 typically the offer/plan doesn't exist.
-    $msg = ($mpRaw | Out-String).Trim()
-    if ($msg -match "was not found" -or $msg -match "BadRequest") {
-        Fail 4 @"
-Marketplace offer 'anthropic/$offer/$plan' not found.
+    # --- Marketplace catalog check (offer exists; agreement status informational) ---
+    # Anthropic publishes Claude as a fetch-style plan named '<offer>-plan-new'
+    # ('-test-plan' is a non-purchasable stub used by some legacy tooling).
+    $offer = "anthropic-$modelName-offer"
+    $plan  = "anthropic-$modelName-plan-new"
+    $mpUrl = "https://management.azure.com/subscriptions/$subId/providers/Microsoft.MarketplaceOrdering/offerTypes/virtualmachine/publishers/$publisher/offers/$offer/plans/$plan/agreements/current?api-version=2021-01-01"
+
+    $mpRaw  = az rest --method get --url $mpUrl 2>&1
+    $mpExit = $LASTEXITCODE
+
+    if ($mpExit -ne 0) {
+        $msg = ($mpRaw | Out-String).Trim()
+        if ($msg -match "was not found" -or $msg -match "BadRequest") {
+            Fail 4 @"
+Marketplace offer 'anthropic/$offer/$plan' not found (family=$family).
 
 Likely causes:
-  - CLAUDE_MODEL_NAME='$modelName' is misspelled.
+  - The model id '$modelName' is misspelled.
   - The model isn't (yet) published in the Anthropic-on-Foundry catalog.
-  - Anthropic changed the plan naming convention (currently '<offer>-test-plan').
+  - Anthropic changed the plan naming convention.
 
 Available Anthropic agreements on this subscription:
   az rest --method get --url 'https://management.azure.com/subscriptions/$subId/providers/Microsoft.MarketplaceOrdering/agreements?api-version=2021-01-01' --query "value[?properties.publisher=='anthropic']"
@@ -97,56 +120,60 @@ Available Anthropic agreements on this subscription:
 Underlying error:
 $msg
 "@
-    }
-    Fail 4 "Unexpected error querying Microsoft.MarketplaceOrdering: $msg"
-}
-
-$mp = $mpRaw | ConvertFrom-Json
-if (-not $mp.properties.accepted) {
-    Write-Host ""
-    Write-Host "WARNING: Marketplace agreement for '$modelName' shows 'accepted: false' on subscription '$subId'." -ForegroundColor Yellow
-    Write-Host "         (publisher=$publisher, offer=$offer, plan=$plan)"
-    Write-Host ""
-    Write-Host "         This is NOT necessarily a deploy blocker. On eligible subscriptions the Cognitive Services RP"
-    Write-Host "         performs an implicit Marketplace subscribe during deployment that auto-accepts the agreement."
-    Write-Host "         If your subscription is ineligible (no entitlement, sandbox/internal-only, paid-offer policy"
-    Write-Host "         denial, etc.) you'll see:"
-    Write-Host ""
-    Write-Host "           'Error occurred when subscribing to Marketplace: Marketplace Subscription purchase"
-    Write-Host "            eligibility check failed...'"
-    Write-Host ""
-    Write-Host "         a minute into 'azd up'. If that happens, pre-accept explicitly:"
-    Write-Host ""
-    Write-Host "           az term accept --publisher $publisher --product $offer --plan $plan"
-    Write-Host ""
-    Write-Host "         or use a subscription with Claude-on-Foundry entitlement. See:"
-    Write-Host "           https://learn.microsoft.com/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude#prerequisites"
-    Write-Host ""
-} else {
-    Write-Host "Preflight: Marketplace agreement already signed (publisher=$publisher, offer=$offer)." -ForegroundColor Green
-}
-
-# --- 4. Capacity headroom (informational warning, never fail) --------------
-$sku = "AIServices.GlobalStandard.$modelName"
-$limitRaw = az cognitiveservices usage list --location $location `
-    --query "[?name.value=='$sku'].limit | [0]" -o tsv 2>$null
-$currentRaw = az cognitiveservices usage list --location $location `
-    --query "[?name.value=='$sku'].currentValue | [0]" -o tsv 2>$null
-
-if (-not [string]::IsNullOrWhiteSpace($limitRaw)) {
-    $limit = [int]([double]$limitRaw)
-    $current = if ([string]::IsNullOrWhiteSpace($currentRaw)) { 0 } else { [int]([double]$currentRaw) }
-    $available = $limit - $current
-    if ($available -lt $capacity) {
-        Write-Host ""
-        Write-Host "WARNING: requested capacity $capacity exceeds available quota ($available of $limit) for '$sku' in '$location'." -ForegroundColor Yellow
-        Write-Host "         Either lower CLAUDE_MODEL_CAPACITY or request a quota increase before retrying."
-        Write-Host ""
+        }
+        Write-Host "Preflight: Marketplace catalog query for '$modelName' returned an unexpected error (continuing — RP will validate at deploy time):" -ForegroundColor Yellow
+        Write-Host "  $msg" -ForegroundColor Yellow
     } else {
-        Write-Host "Preflight: quota OK ($available of $limit available in $location)." -ForegroundColor Green
+        $mp = $mpRaw | ConvertFrom-Json
+        if (-not $mp.properties.accepted) {
+            Write-Host "Preflight: '$modelName' marketplace agreement is currently unsigned. The Cognitive Services RP will auto-sign during deployment on eligible subs." -ForegroundColor Yellow
+            Write-Host "         If your subscription blocks RP-initiated subscribes, pre-accept manually:" -ForegroundColor Yellow
+            Write-Host "           az term accept --publisher $publisher --product $offer --plan $plan" -ForegroundColor Yellow
+        } else {
+            Write-Host "Preflight: '$modelName' marketplace agreement signed." -ForegroundColor Green
+        }
     }
-} else {
-    Write-Host "Preflight: no quota row visible for '$sku' in '$location' yet \u2014 first deploy may surface a quota error from the RP." -ForegroundColor Yellow
+
+    # --- Quota headroom (HARD FAIL on insufficient) ------------------------
+    # The Cognitive Services RP returns an opaque `400 715-123420` for
+    # quota-rejected requests when called via azapi/Terraform. Catch it
+    # early with a clear message.
+    $sku = "AIServices.GlobalStandard.$modelName"
+    $limitRaw   = az cognitiveservices usage list --location $location --query "[?name.value=='$sku'].limit | [0]" -o tsv 2>$null
+    $currentRaw = az cognitiveservices usage list --location $location --query "[?name.value=='$sku'].currentValue | [0]" -o tsv 2>$null
+
+    if (-not [string]::IsNullOrWhiteSpace($limitRaw)) {
+        $limit     = [int]([double]$limitRaw)
+        $current   = if ([string]::IsNullOrWhiteSpace($currentRaw)) { 0 } else { [int]([double]$currentRaw) }
+        $available = $limit - $current
+        if ($available -lt $capacity) {
+            $upperFamily = $family.ToUpper()
+            Fail 6 @"
+Insufficient quota for '$modelName' (family=$family) in '$location'.
+
+Requested capacity: $capacity TPM (thousands)
+Available:         $available TPM (limit $limit, currently used $current)
+
+Fix one of:
+  - Lower the requested capacity:
+      azd env set CLAUDE_$($upperFamily)_CAPACITY $available
+    (or CLAUDE_MODEL_CAPACITY for legacy single-model mode)
+  - Free up quota by deleting unused deployments:
+      az cognitiveservices account deployment list --name <foundry> --resource-group <rg> -o table
+      az cognitiveservices account deployment delete --name <foundry> --resource-group <rg> --deployment-name <name>
+  - Request a quota increase in the Azure Foundry portal:
+      Foundry portal -> Management center -> Quota -> select '$sku' -> Request increase
+
+Note: without this preflight, Terraform (azapi_resource) would fail with an
+opaque '400 715-123420' error because azapi bypasses ARM preflight
+validation. Bicep and 'az deployment group create' show the real
+'InsufficientQuota' message because they go through ARM preflight.
+"@
+        }
+        Write-Host "Preflight: '$modelName' quota OK ($capacity requested, $available available of $limit in $location)." -ForegroundColor Green
+    } else {
+        Write-Host "Preflight: no quota row visible for '$sku' in '$location' yet — first deploy may surface a quota error from the RP." -ForegroundColor Yellow
+    }
 }
 
 Write-Host "Preflight OK." -ForegroundColor Green

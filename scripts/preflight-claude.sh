@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# Preflight check for Claude-on-Microsoft-Foundry deployments.
+#
+# Per-family mode: set any of CLAUDE_HAIKU_MODEL / CLAUDE_SONNET_MODEL /
+# CLAUDE_OPUS_MODEL to validate that family. Empty = skip. If all three are
+# empty, falls back to CLAUDE_MODEL_NAME (legacy single-model behavior).
+#
+# Gates `azd up` on:
+#   1. Required env vars being set.
+#   2. (Informational) Marketplace catalog: each requested model exists in
+#      the Anthropic-on-Foundry catalog (offer must resolve via
+#      Microsoft.MarketplaceOrdering). A typo is a hard fail. Agreement
+#      signed/unsigned is informational (RP auto-signs at deploy time on
+#      eligible subs).
+#   3. **Per-region Cognitive Services quota headroom** per model.
+#      Hard fail (exit 6) when used + requested > limit. This catches the
+#      opaque `400 715-123420` error that Terraform's azapi_resource returns
+#      for quota-rejected requests (azapi bypasses ARM preflight; Bicep /
+#      `az deployment group create` show the real `InsufficientQuota`).
+#
+# Exit codes:
+#   0  Preflight passed.
+#   1  A required env var is missing.
+#   2  Azure CLI / subscription not available.
+#   4  Marketplace offer not found.
+#   6  Insufficient quota.
+
+set -euo pipefail
+
+fail() {
+    local code="$1"; shift
+    printf '\nERROR: %s\n\n' "$*" >&2
+    exit "$code"
+}
+
+# --- 1. Required env vars ---------------------------------------------------
+if [ -z "${CLAUDE_ORGANIZATION_NAME:-}" ]; then
+    fail 1 "CLAUDE_ORGANIZATION_NAME is required. Run: azd env set CLAUDE_ORGANIZATION_NAME 'Your Org'"
+fi
+if [ -z "${AZURE_LOCATION:-}" ]; then
+    fail 1 "AZURE_LOCATION is required. Run: azd env set AZURE_LOCATION swedencentral"
+fi
+
+LOCATION="$AZURE_LOCATION"
+
+# Build the list of (family, model, capacity) tuples.
+FAMILIES=()
+MODELS=()
+CAPACITIES=()
+
+if [ -n "${CLAUDE_HAIKU_MODEL:-}" ]; then
+    FAMILIES+=("haiku");  MODELS+=("$CLAUDE_HAIKU_MODEL");  CAPACITIES+=("${CLAUDE_HAIKU_CAPACITY:-50}")
+fi
+if [ -n "${CLAUDE_SONNET_MODEL:-}" ]; then
+    FAMILIES+=("sonnet"); MODELS+=("$CLAUDE_SONNET_MODEL"); CAPACITIES+=("${CLAUDE_SONNET_CAPACITY:-50}")
+fi
+if [ -n "${CLAUDE_OPUS_MODEL:-}" ]; then
+    FAMILIES+=("opus");   MODELS+=("$CLAUDE_OPUS_MODEL");   CAPACITIES+=("${CLAUDE_OPUS_CAPACITY:-50}")
+fi
+
+if [ "${#FAMILIES[@]}" -eq 0 ]; then
+    FAMILIES+=("legacy")
+    MODELS+=("${CLAUDE_MODEL_NAME:-claude-sonnet-4-6}")
+    CAPACITIES+=("${CLAUDE_MODEL_CAPACITY:-50}")
+fi
+
+# --- 2. Azure CLI / active subscription ------------------------------------
+if ! command -v az >/dev/null 2>&1; then
+    fail 2 "Azure CLI (az) not found on PATH. Install: https://learn.microsoft.com/cli/azure/install-azure-cli"
+fi
+
+SUB_ID="$(az account show --query id -o tsv 2>/dev/null || true)"
+if [ -z "$SUB_ID" ]; then
+    fail 2 "No active Azure subscription. Run: az login   (and 'az account set --subscription <id>' if needed)"
+fi
+
+SUMMARY=""
+for i in "${!FAMILIES[@]}"; do
+    SUMMARY="${SUMMARY}${SUMMARY:+, }${FAMILIES[$i]}=${MODELS[$i]}@${CAPACITIES[$i]}"
+done
+echo "Preflight: subscription $SUB_ID, location $LOCATION, deployments: $SUMMARY"
+
+PUBLISHER="anthropic"
+
+for i in "${!FAMILIES[@]}"; do
+    FAMILY="${FAMILIES[$i]}"
+    MODEL_NAME="${MODELS[$i]}"
+    CAPACITY="${CAPACITIES[$i]}"
+
+    # Anthropic publishes Claude as a fetch-style plan named '<offer>-plan-new'.
+    OFFER="anthropic-$MODEL_NAME-offer"
+    PLAN="anthropic-$MODEL_NAME-plan-new"
+    MP_URL="https://management.azure.com/subscriptions/$SUB_ID/providers/Microsoft.MarketplaceOrdering/offerTypes/virtualmachine/publishers/$PUBLISHER/offers/$OFFER/plans/$PLAN/agreements/current?api-version=2021-01-01"
+
+    set +e
+    MP_RAW="$(az rest --method get --url "$MP_URL" 2>&1)"
+    MP_EXIT=$?
+    set -e
+
+    if [ "$MP_EXIT" -ne 0 ]; then
+        if echo "$MP_RAW" | grep -qE "was not found|BadRequest"; then
+            fail 4 "Marketplace offer 'anthropic/$OFFER/$PLAN' not found (family=$FAMILY).
+
+Likely causes:
+  - The model id '$MODEL_NAME' is misspelled.
+  - The model isn't (yet) published in the Anthropic-on-Foundry catalog.
+  - Anthropic changed the plan naming convention.
+
+Available Anthropic agreements on this subscription:
+  az rest --method get --url 'https://management.azure.com/subscriptions/$SUB_ID/providers/Microsoft.MarketplaceOrdering/agreements?api-version=2021-01-01' --query \"value[?properties.publisher=='anthropic']\"
+
+Underlying error:
+$MP_RAW"
+        fi
+        echo "Preflight: Marketplace catalog query for '$MODEL_NAME' returned an unexpected error (continuing — RP will validate at deploy time):" >&2
+        echo "  $MP_RAW" >&2
+    else
+        ACCEPTED="$(echo "$MP_RAW" | python -c 'import json, sys; print(json.load(sys.stdin)["properties"]["accepted"])' 2>/dev/null || true)"
+        if [ "$ACCEPTED" != "True" ] && [ "$ACCEPTED" != "true" ]; then
+            echo "Preflight: '$MODEL_NAME' marketplace agreement is currently unsigned. The Cognitive Services RP will auto-sign during deployment on eligible subs."
+            echo "         If your subscription blocks RP-initiated subscribes, pre-accept manually:"
+            echo "           az term accept --publisher $PUBLISHER --product $OFFER --plan $PLAN"
+        else
+            echo "Preflight: '$MODEL_NAME' marketplace agreement signed."
+        fi
+    fi
+
+    # --- Quota headroom (HARD FAIL on insufficient) ------------------------
+    SKU="AIServices.GlobalStandard.$MODEL_NAME"
+    LIMIT="$(az cognitiveservices usage list --location "$LOCATION" --query "[?name.value=='$SKU'].limit | [0]" -o tsv 2>/dev/null || true)"
+    CURRENT="$(az cognitiveservices usage list --location "$LOCATION" --query "[?name.value=='$SKU'].currentValue | [0]" -o tsv 2>/dev/null || true)"
+
+    if [ -n "$LIMIT" ]; then
+        LIMIT_INT="${LIMIT%%.*}"
+        CURRENT_INT="${CURRENT%%.*}"
+        CURRENT_INT="${CURRENT_INT:-0}"
+        AVAILABLE=$(( LIMIT_INT - CURRENT_INT ))
+        if [ "$AVAILABLE" -lt "$CAPACITY" ]; then
+            FAMILY_UPPER="$(echo "$FAMILY" | tr '[:lower:]' '[:upper:]')"
+            fail 6 "Insufficient quota for '$MODEL_NAME' (family=$FAMILY) in '$LOCATION'.
+
+Requested capacity: $CAPACITY TPM (thousands)
+Available:         $AVAILABLE TPM (limit $LIMIT_INT, currently used $CURRENT_INT)
+
+Fix one of:
+  - Lower the requested capacity:
+      azd env set CLAUDE_${FAMILY_UPPER}_CAPACITY $AVAILABLE
+    (or CLAUDE_MODEL_CAPACITY for legacy single-model mode)
+  - Free up quota by deleting unused deployments:
+      az cognitiveservices account deployment list --name <foundry> --resource-group <rg> -o table
+      az cognitiveservices account deployment delete --name <foundry> --resource-group <rg> --deployment-name <name>
+  - Request a quota increase in the Azure Foundry portal:
+      Foundry portal -> Management center -> Quota -> select '$SKU' -> Request increase
+
+Note: without this preflight, Terraform (azapi_resource) would fail with an
+opaque '400 715-123420' error because azapi bypasses ARM preflight
+validation. Bicep / 'az deployment group create' show the real
+'InsufficientQuota' message because they go through ARM preflight."
+        fi
+        echo "Preflight: '$MODEL_NAME' quota OK ($CAPACITY requested, $AVAILABLE available of $LIMIT_INT in $LOCATION)."
+    else
+        echo "Preflight: no quota row visible for '$SKU' in '$LOCATION' yet — first deploy may surface a quota error from the RP." >&2
+    fi
+done
+
+echo "Preflight OK."

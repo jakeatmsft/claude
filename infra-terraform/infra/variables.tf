@@ -7,11 +7,11 @@ variable "environment_name" {
 }
 
 variable "location" {
-  description = "Azure region. Claude in Foundry: eastus2 or swedencentral (or westus2 for opus-only)."
+  description = "Azure region. All three families coexist in eastus2 or swedencentral."
   type        = string
   validation {
     condition     = contains(["eastus2", "swedencentral", "westus2"], var.location)
-    error_message = "location must be eastus2, swedencentral, or westus2 (opus only)."
+    error_message = "location must be eastus2, swedencentral, or westus2."
   }
 }
 
@@ -27,7 +27,7 @@ variable "principal_id" {
 }
 
 variable "assign_rbac" {
-  description = "Whether to assign Azure AI User / Project Manager to principal_id. Set to \"true\" to enable. Requires Microsoft.Authorization/roleAssignments/write on the deployer."
+  description = "Whether to assign Foundry User + Foundry Project Manager (formerly Azure AI User / Project Manager) to principal_id. Set to \"true\" to enable. Requires Microsoft.Authorization/roleAssignments/write on the deployer."
   type        = string
   default     = "false"
 }
@@ -42,24 +42,42 @@ variable "base_name" {
 }
 
 # ---------------------------------------------------------------------------
-# Claude model
+# Per-family Claude deployments (preferred). Empty string = skip that family.
 # ---------------------------------------------------------------------------
-variable "model_name" {
-  description = "Claude model id."
+variable "haiku_model" {
+  description = "Haiku family model id. Empty = do not deploy haiku."
   type        = string
-  default     = "claude-sonnet-4-6"
-  validation {
-    condition = contains([
-      "claude-haiku-4-5",
-      "claude-sonnet-4-5",
-      "claude-sonnet-4-6",
-      "claude-opus-4-1",
-      "claude-opus-4-5",
-      "claude-opus-4-6",
-      "claude-opus-4-7",
-    ], var.model_name)
-    error_message = "Unsupported Claude model."
-  }
+  default     = ""
+}
+
+variable "sonnet_model" {
+  description = "Sonnet family model id. Empty = do not deploy sonnet."
+  type        = string
+  default     = ""
+}
+
+variable "opus_model" {
+  description = "Opus family model id. Empty = do not deploy opus."
+  type        = string
+  default     = ""
+}
+
+variable "haiku_capacity" {
+  description = "Haiku deployment capacity (TPM / 1000). Default 25 fits most subs out of the box; raise via `azd env set CLAUDE_HAIKU_CAPACITY <n>`."
+  type        = string
+  default     = "25"
+}
+
+variable "sonnet_capacity" {
+  description = "Sonnet deployment capacity (TPM / 1000). Default 25 fits most subs out of the box; raise via `azd env set CLAUDE_SONNET_CAPACITY <n>`."
+  type        = string
+  default     = "25"
+}
+
+variable "opus_capacity" {
+  description = "Opus deployment capacity (TPM / 1000). Default 25 fits most subs out of the box; raise via `azd env set CLAUDE_OPUS_CAPACITY <n>`."
+  type        = string
+  default     = "25"
 }
 
 variable "model_version" {
@@ -68,10 +86,20 @@ variable "model_version" {
   default     = "1"
 }
 
-variable "model_capacity" {
-  description = "Deployment capacity (TPM / 1000). Sent as string from azd, converted to number."
+# ---------------------------------------------------------------------------
+# Legacy single-model fallback. Only used when all three per-family vars
+# are empty.
+# ---------------------------------------------------------------------------
+variable "model_name" {
+  description = "Legacy single-model name. Ignored when any of haiku_model/sonnet_model/opus_model is set."
   type        = string
-  default     = "50"
+  default     = "claude-sonnet-4-6"
+}
+
+variable "model_capacity" {
+  description = "Legacy single-model capacity. Ignored when any per-family var is set."
+  type        = string
+  default     = "25"
 }
 
 # ---------------------------------------------------------------------------

@@ -1,3 +1,21 @@
+<!--
+---
+page_type: sample
+languages:
+- python
+- typescript
+- go
+- csharp
+- java
+products:
+- azure-openai
+- azure
+urlFragment: claude
+name: The Claude on Foundry Starter Kit
+description: Deploy Claude models in Microsoft Foundry using one CLI command with Bicep or Terraform. Includes Anthropic SDK for Python examples using the Messages API. Wires up Claude Code so you can run the agentic CLI against your fresh deployment immediately.
+---
+-->
+
 # The Claude on Foundry Starter Kit
 
 > Short link: **<https://aka.ms/claude/start>**

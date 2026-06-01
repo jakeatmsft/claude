@@ -45,6 +45,7 @@ Two equivalent IaC variants ship side-by-side. Pick one and `azd up`:
 
 The Python sample under [`src/`](./src/) works against either.
 
+## Terms of use
 > [!IMPORTANT]
 > **By running `azd up` you accept Anthropic's commercial terms for Claude.**
 >
@@ -222,7 +223,7 @@ Zero local install. The included [`.devcontainer/devcontainer.json`](./.devconta
 
 ## Configuration
 
-Rows marked **Attest** below are the three `modelProviderData` fields sent to Anthropic and used by the marketplace RP to auto-sign the [Anthropic Commercial Terms](https://www.anthropic.com/legal/commercial-terms) (which incorporate the [Usage Policy](https://www.anthropic.com/legal/aup) and [Supported Regions Policy](https://aka.ms/supported_anthropic_regions) by reference) on your behalf — see the [IMPORTANT note at the top of this README](#claude-on-microsoft-foundry--starter). Set them to match your real organization.
+Rows marked **Attest** below are the three `modelProviderData` fields sent to Anthropic and used by the marketplace RP to auto-sign the [Anthropic Commercial Terms](https://www.anthropic.com/legal/commercial-terms) (which incorporate the [Usage Policy](https://www.anthropic.com/legal/aup) and [Supported Regions Policy](https://aka.ms/supported_anthropic_regions) by reference) on your behalf — see the [IMPORTANT note at the top of this README](#terms-of-use). Set them to match your real organization.
 
 | Var | Required | Default | Notes |
 |---|---|---|---|

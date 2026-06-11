@@ -178,24 +178,9 @@ That's it. To deploy other families, tweak capacity, or change attestation, see 
 
 ## Use Claude
 
-After `azd up` finishes, the postprovision hook writes a project-scoped activator file. Source it once per shell:
+### Python SDK
 
-```powershell
-. ./claude-code.env.ps1     # PowerShell. macOS/Linux: source ./claude-code.env.sh
-```
-
-Then try either path.
-
-**Claude Code CLI:**
-
-```powershell
-claude                       # interactive REPL
-'who are you?' | claude -p   # one-shot prompt
-```
-
-If `claude` isn't installed, the postprovision hook printed the one-line installer command. Or set `azd env set CLAUDE_CODE_AUTO_INSTALL true` before `azd up` to install it automatically.
-
-**Python SDK:**
+The Python sample is the primary hello-world path. It calls your Foundry-hosted Claude deployment with Microsoft Entra ID &mdash; no API key.
 
 ```powershell
 # from infra-bicep/ or infra-terraform/ (so `azd env get-values` works).
@@ -210,6 +195,76 @@ python src/hello_claude.py                  # one-shot Messages call (Entra ID)
 python src/chat_stream.py                   # interactive streaming chat &mdash; type a message, `exit` to quit
 python src/hello_claude_token_refresh.py    # long-running variant with per-request token refresh
 ```
+
+<details>
+<summary><strong>SDK call shape</strong> &mdash; the minimal Python snippet and long-running token refresh</summary>
+
+We use the plain `anthropic.Anthropic` client. The Entra ID token is captured once at startup and is valid for ~1 hour &mdash; fine for a one-shot script or a short-lived process. For long-running processes, use the token-refresh shim below.
+
+```python
+from anthropic import Anthropic
+from azure.identity import DefaultAzureCredential
+
+token = DefaultAzureCredential().get_token(
+    "https://ai.azure.com/.default"
+).token
+client = Anthropic(
+    auth_token=token,
+    base_url="https://<resource>.services.ai.azure.com/anthropic",
+)
+msg = client.messages.create(
+    model="<deployment-name>",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hi"}],
+)
+```
+
+> Pass the **deployment name** (not the model id) as `model`. The SDK appends `/v1/messages` to the configured `base_url`.
+
+<details id="advanced-long-running-processes-auto-refreshing-the-entra-id-token">
+<summary><strong>Long-running processes: auto-refreshing the Entra ID token</strong></summary>
+
+The plain `anthropic.Anthropic` client only accepts `auth_token: str | None`, so a captured token will start failing with `401 Unauthorized` after ~1 hour.
+
+For services, daemons, long batch jobs, or notebooks left open, use [src/hello_claude_token_refresh.py](./src/hello_claude_token_refresh.py). It defines a tiny `AnthropicIdentity(Anthropic)` subclass that overrides the `auth_token` property to call `azure.identity.get_bearer_token_provider(...)` per request, giving free per-request token refresh:
+
+```python
+from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+# AnthropicIdentity is defined in hello_claude_token_refresh.py
+from hello_claude_token_refresh import AnthropicIdentity
+
+token_provider = get_bearer_token_provider(
+    DefaultAzureCredential(), "https://ai.azure.com/.default"
+)
+client = AnthropicIdentity(
+    azure_ad_token_provider=token_provider,
+    base_url="https://<resource>.services.ai.azure.com/anthropic",
+)
+```
+
+If the Anthropic SDK ever accepts a callable for `auth_token`, this shim becomes unnecessary.
+
+</details>
+
+</details>
+
+<details>
+<summary><strong>Claude Code CLI</strong> &mdash; optional agentic CLI against the same deployment</summary>
+
+After `azd up` finishes, the postprovision hook writes a project-scoped activator file. Source it once per shell:
+
+```powershell
+. ./claude-code.env.ps1     # PowerShell. macOS/Linux: source ./claude-code.env.sh
+```
+
+```powershell
+claude                       # interactive REPL
+'who are you?' | claude -p   # one-shot prompt
+```
+
+If `claude` isn't installed, the postprovision hook printed the one-line installer command. Or set `azd env set CLAUDE_CODE_AUTO_INSTALL true` before `azd up` to install it automatically.
+
+</details>
 
 ### Verify the wiring
 
@@ -413,58 +468,6 @@ Then open the Command Palette &rarr; **"Claude Code: Start"** (or click the Clau
 > ```
 
 > **Multi-family support.** Set any combination of `CLAUDE_HAIKU_MODEL` / `CLAUDE_SONNET_MODEL` / `CLAUDE_OPUS_MODEL` and the template deploys each family as a sibling deployment under the same Foundry account. The hook writes one `ANTHROPIC_DEFAULT_<FAMILY>_MODEL` per deployed family into the activator + `.vscode/settings.json` automatically. See [Choosing which models to deploy](#choosing-which-models-to-deploy).
-
-</details>
-
-<details>
-<summary><strong>SDK call shape</strong> &mdash; the minimal Python snippet and the long-running token-refresh shim</summary>
-
-We use the plain `anthropic.Anthropic` client. The Entra ID token is captured once at startup and is valid for ~1 hour &mdash; fine for a one-shot script or a short-lived process. For long-running processes, use the token-refresh shim below.
-
-```python
-from anthropic import Anthropic
-from azure.identity import DefaultAzureCredential
-
-token = DefaultAzureCredential().get_token(
-    "https://ai.azure.com/.default"
-).token
-client = Anthropic(
-    auth_token=token,
-    base_url="https://<resource>.services.ai.azure.com/anthropic",
-)
-msg = client.messages.create(
-    model="<deployment-name>",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "Hi"}],
-)
-```
-
-> Pass the **deployment name** (not the model id) as `model`. The SDK appends `/v1/messages` to the configured `base_url`.
-
-<details id="advanced-long-running-processes-auto-refreshing-the-entra-id-token">
-<summary><strong>Long-running processes: auto-refreshing the Entra ID token</strong></summary>
-
-The plain `anthropic.Anthropic` client only accepts `auth_token: str | None`, so a captured token will start failing with `401 Unauthorized` after ~1 hour.
-
-For services, daemons, long batch jobs, or notebooks left open, use [src/hello_claude_token_refresh.py](./src/hello_claude_token_refresh.py). It defines a tiny `AnthropicIdentity(Anthropic)` subclass that overrides the `auth_token` property to call `azure.identity.get_bearer_token_provider(...)` per request, giving free per-request token refresh:
-
-```python
-from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-# AnthropicIdentity is defined in hello_claude_token_refresh.py
-from hello_claude_token_refresh import AnthropicIdentity
-
-token_provider = get_bearer_token_provider(
-    DefaultAzureCredential(), "https://ai.azure.com/.default"
-)
-client = AnthropicIdentity(
-    azure_ad_token_provider=token_provider,
-    base_url="https://<resource>.services.ai.azure.com/anthropic",
-)
-```
-
-If the Anthropic SDK ever accepts a callable for `auth_token`, this shim becomes unnecessary.
-
-</details>
 
 </details>
 

@@ -121,7 +121,7 @@ The fastest way to try this. Everything runs in your browser &mdash; nothing to 
 
 This repo ships an open [Agent Skills](https://agentskills.io/) playbook. Any assistant that reads [`AGENTS.md`](./AGENTS.md) &mdash; GitHub Copilot Chat, Claude Code, OpenAI Codex, Cursor, Gemini CLI, Amp, Goose, and friends &mdash; onboards you in plain English.
 
-**Copy this prompt into your AI agent inside the cloned repo:**
+**Copy this into GitHub Copilot Chat (or your AI agent) inside the cloned repo:**
 
 > Deploy Claude on Microsoft Foundry using this repo. Use **Bicep**, region **eastus2**, model **claude-sonnet-4-6**, organization name **Contoso**.
 
@@ -222,7 +222,14 @@ pwsh -File scripts/verify-claude-code.ps1
 
 Exits non-zero on any failure &mdash; safe to wire into CI. Use `-SkipClaudeCall` for config-only checks (no token cost), or `-RunPythonSample` to also run the Python Entra ID round trip. For the manual breakdown of what the script does, see [Verify Claude Code is wired up &mdash; manual checks](#verify-claude-code-is-wired-up) in Advanced.
 
-## Tear down
+## Advanced
+
+Everything below is opt-in. The quickstart above is enough to get a working Claude deployment.
+
+<details>
+<summary><strong>Cleanup / tear down</strong> &mdash; remove Azure resources and release quota</summary>
+
+<a id="tear-down"></a>
 
 When you're done, free the resources *and* the TPM quota:
 
@@ -233,11 +240,7 @@ azd down --force --purge
 
 The `--purge` flag immediately releases the Foundry account from soft-delete; otherwise its TPM quota stays reserved for up to 48 h. If you didn't pass `--purge` and need to reclaim quota manually, see [Free quota held by soft-deleted accounts](#free-quota-held-by-soft-deleted-accounts).
 
----
-
-## Advanced
-
-Everything below is opt-in. The quickstart above is enough to get a working Claude deployment.
+</details>
 
 <details>
 <summary><strong>Choosing which models to deploy</strong> &mdash; haiku / sonnet / opus, capacity, catalog</summary>
@@ -717,12 +720,8 @@ The Terraform variant uses `azapi_resource` for both the Foundry account and the
 
 </details>
 
----
-
-## Troubleshooting
-
 <details id="troubleshooting">
-<summary><strong>Common errors and fixes</strong></summary>
+<summary><strong>Troubleshooting: common errors and fixes</strong></summary>
 
 | Symptom | Fix |
 |---|---|

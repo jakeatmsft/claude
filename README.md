@@ -72,27 +72,43 @@ az term show \
 
 </details>
 
-<details>
-<summary><strong>Prerequisites</strong> &mdash; an Azure subscription with Claude entitlement, plus <code>az</code> + <code>azd</code> (or just open in Codespaces)</summary>
-
-- An Azure subscription [eligible to deploy Claude in Foundry](https://learn.microsoft.com/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude#prerequisites), with `Contributor` on the target subscription/resource group (see [Required permissions](#required-permissions) for the full breakdown, including the data-plane role you need to call the model).
-- Region: `eastus2` or `swedencentral` host all three Claude families (haiku / sonnet / opus). `westus2` is sonnet + opus only.
-- Tools: [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), [azd](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd), Python &ge; 3.10, and [Terraform](https://developer.hashicorp.com/terraform/install) &ge; 1.6 (Terraform variant only). **Or just open the repo in GitHub Codespaces / VS Code Dev Containers** &mdash; the included [`.devcontainer/devcontainer.json`](./.devcontainer/devcontainer.json) preinstalls `az`, `azd`, and Python 3.13 for you.
-- Run `az login` once (in addition to `azd auth login`). The `preprovision` hook uses `az` to validate that each requested Claude SKU exists in the Anthropic-on-Foundry catalog and that you have enough TPM quota in the chosen region. If `az` isn't installed or signed in, the hook warns and skips those checks so `azd up` still works &mdash; you just lose the proactive error messages.
-
-</details>
-
 ---
 
 ## Quickstart
 
-Three ways to deploy &mdash; pick whichever feels most welcoming.
+The main path is `azd up` on your laptop. Two collapsed alternatives below if you'd rather run in the browser or have an AI agent drive it for you.
 
-### 1. Zero-touch in GitHub Codespaces (no local install)
+### Local with `azd up`
+
+You need:
+
+- An Azure subscription [eligible to deploy Claude in Foundry](https://learn.microsoft.com/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude#prerequisites), with `Contributor` on the target subscription/resource group (see [Required permissions](#required-permissions) for the full breakdown, including the data-plane role you need to call the model).
+- Region: `eastus2` or `swedencentral` host all three Claude families (haiku / sonnet / opus). `westus2` is sonnet + opus only.
+- Tools: [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli), [azd](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd), Python &ge; 3.10, and [Terraform](https://developer.hashicorp.com/terraform/install) &ge; 1.6 (Terraform variant only).
+- Run `az login` once (in addition to `azd auth login`). The `preprovision` hook uses `az` to validate that each requested Claude SKU exists in the Anthropic-on-Foundry catalog and that you have enough TPM quota in the chosen region. If `az` isn't installed or signed in, the hook warns and skips those checks so `azd up` still works &mdash; you just lose the proactive error messages.
+
+```powershell
+git clone https://github.com/Azure-Samples/claude.git
+cd claude/infra-bicep   # or: cd claude/infra-terraform
+
+# If your Claude-eligible subscription lives in a non-default tenant, pass --tenant-id:
+azd auth login          # or: azd auth login --tenant-id <tenant-id>
+
+azd env new my-claude
+azd env set CLAUDE_ORGANIZATION_NAME "Contoso"
+azd env set AZURE_LOCATION "swedencentral"
+azd env set CLAUDE_SONNET_MODEL "claude-sonnet-4-6"
+azd up
+```
+
+That's it. To deploy other families, tweak capacity, or change attestation, see [Choosing which models to deploy](#choosing-which-models-to-deploy) and [All configuration variables](#all-configuration-variables) in Advanced.
+
+<details>
+<summary><strong>Zero-touch in GitHub Codespaces</strong> &mdash; no local install, runs in your browser</summary>
 
 <a id="quickstart-in-codespaces"></a>
 
-The fastest way to try this. Everything runs in your browser &mdash; nothing to install locally.
+The fastest way to try this without installing anything locally &mdash; the included [`.devcontainer/devcontainer.json`](./.devcontainer/devcontainer.json) preinstalls `az`, `azd`, and Python 3.13 for you.
 
 1. [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Azure-Samples/claude?quickstart=1) &mdash; click to launch (or use the green **Code** button on GitHub &rarr; **Codespaces** &rarr; **Create codespace on main**). The container builds in ~2 min the first time.
 2. When the terminal is ready, sign in to Azure with device-code (the browser flow works inside a Codespace):
@@ -117,9 +133,12 @@ The fastest way to try this. Everything runs in your browser &mdash; nothing to 
 
 > **Prefer the Dev Container on your laptop?** Click the **Dev Containers** badge at the top of this README, or install the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) and run *"Dev Containers: Reopen in Container"* on the cloned repo. Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/).
 
-### 2. Ask an AI agent
+</details>
 
-This repo ships an open [Agent Skills](https://agentskills.io/) playbook. Any assistant that reads [`AGENTS.md`](./AGENTS.md) &mdash; GitHub Copilot Chat, Claude Code, OpenAI Codex, Cursor, Gemini CLI, Amp, Goose, and friends &mdash; onboards you in plain English.
+<details>
+<summary><strong>Ask an AI agent</strong> &mdash; let GitHub Copilot Chat (or another assistant) drive <code>azd up</code> for you</summary>
+
+This repo ships an open [Agent Skills](https://agentskills.io/) playbook. Any assistant that reads [`AGENTS.md`](./AGENTS.md) &mdash; GitHub Copilot Chat, Claude Code, OpenAI Codex, Cursor, Gemini CLI, Amp, Goose, and friends &mdash; onboards you in plain English and installs the tools it needs along the way.
 
 **Copy this into GitHub Copilot Chat (or your AI agent) inside the cloned repo:**
 
@@ -154,25 +173,7 @@ More example prompts you can also try:
 
 </details>
 
-### 3. Locally with `azd up`
-
-Already have `az` + `azd` installed? Skip Codespaces and run it locally.
-
-```powershell
-git clone https://github.com/Azure-Samples/claude.git
-cd claude/infra-bicep   # or: cd claude/infra-terraform
-
-# If your Claude-eligible subscription lives in a non-default tenant, pass --tenant-id:
-azd auth login          # or: azd auth login --tenant-id <tenant-id>
-
-azd env new my-claude
-azd env set CLAUDE_ORGANIZATION_NAME "Contoso"
-azd env set AZURE_LOCATION "swedencentral"
-azd env set CLAUDE_SONNET_MODEL "claude-sonnet-4-6"
-azd up
-```
-
-That's it. To deploy other families, tweak capacity, or change attestation, see [Choosing which models to deploy](#choosing-which-models-to-deploy) and [All configuration variables](#all-configuration-variables) in Advanced.
+</details>
 
 ---
 

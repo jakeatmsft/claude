@@ -7,10 +7,9 @@
 # README.md before running `azd up`. Set `claude_organization_name`,
 # `claude_country_code`, `claude_industry` to match your real organization.
 # ----------------------------------------------------------------------------
-# - Foundry account is created via `azapi_resource` so we can set
-#   `allowProjectManagement = true` (required for child projects, not yet
-#   exposed by `azurerm_cognitive_account`).
-# - Claude deployments are also `azapi_resource` because `modelProviderData`
+# - Foundry account and Claude deployments both use `azapi_resource` to stay
+#   on the same preview API surface as the Bicep variant.
+# - Claude deployments are `azapi_resource` because `modelProviderData`
 #   isn't yet exposed by `azurerm_cognitive_deployment` (issue #31140).
 # - Per-family deployment mode: set any of haiku_model / sonnet_model /
 #   opus_model to deploy that family (empty = skip). All three families
@@ -22,7 +21,6 @@ locals {
     "azd-env-name" = var.environment_name
   }
   account_name = "${var.base_name}-foundry-${random_string.suffix.result}"
-  project_name = "${var.base_name}-proj-${random_string.suffix.result}"
   name_suffix  = substr(random_string.suffix.result, 0, 6)
 
   # Resolve effective per-family models. If no family vars are set, route the
@@ -72,33 +70,13 @@ resource "azapi_resource" "foundry" {
       name = "S0"
     }
     properties = {
-      customSubDomainName    = local.account_name
-      allowProjectManagement = true
-      publicNetworkAccess    = "Enabled"
-      disableLocalAuth       = false
+      customSubDomainName = local.account_name
+      publicNetworkAccess = "Enabled"
+      disableLocalAuth    = false
     }
   }
 
   response_export_values = ["name", "identity.principalId"]
-}
-
-# --- Foundry project ------------------------------------------------------
-resource "azapi_resource" "project" {
-  type      = "Microsoft.CognitiveServices/accounts/projects@2025-10-01-preview"
-  name      = local.project_name
-  parent_id = azapi_resource.foundry.id
-  location  = azurerm_resource_group.rg.location
-  tags      = local.tags
-
-  identity {
-    type = "SystemAssigned"
-  }
-
-  body = {
-    properties = {}
-  }
-
-  response_export_values = ["name"]
 }
 
 # --- Per-family Claude deployments ----------------------------------------
@@ -140,7 +118,6 @@ resource "azapi_resource" "claude_haiku" {
   # after `azd up` work without retries. When ASSIGN_RBAC is false, the
   # collection is empty and depends_on is satisfied immediately.
   depends_on = [
-    azapi_resource.project,
     azurerm_role_assignment.cognitive_services_user,
   ]
 }
@@ -175,7 +152,6 @@ resource "azapi_resource" "claude_sonnet" {
 
   response_export_values = ["name"]
   depends_on = [
-    azapi_resource.project,
     azapi_resource.claude_haiku,
     azurerm_role_assignment.cognitive_services_user,
   ]
@@ -211,7 +187,6 @@ resource "azapi_resource" "claude_opus" {
 
   response_export_values = ["name"]
   depends_on = [
-    azapi_resource.project,
     azapi_resource.claude_sonnet,
     azurerm_role_assignment.cognitive_services_user,
   ]

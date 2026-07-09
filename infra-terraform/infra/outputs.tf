@@ -3,11 +3,6 @@ output "CLAUDE_BASE_URL" {
   value       = "https://${azapi_resource.foundry.name}.services.ai.azure.com/anthropic"
 }
 
-output "FOUNDRY_PROJECT_ENDPOINT" {
-  description = "Foundry project endpoint (Agents SDK / Foundry Projects)."
-  value       = "https://${azapi_resource.foundry.name}.services.ai.azure.com/api/projects/${azapi_resource.project.name}"
-}
-
 output "FOUNDRY_ACCOUNT_NAME" {
   value = azapi_resource.foundry.name
 }

@@ -1,4 +1,4 @@
-// Foundry account + project + per-family Claude deployments + optional RBAC.
+// Foundry account + per-family Claude deployments + optional RBAC.
 //
 // Each of haikuModel / sonnetModel / opusModel is independent. Empty string
 // means "skip that family". The three deployments share the same Foundry
@@ -6,7 +6,6 @@
 param location string
 param tags object
 param accountName string
-param projectName string
 param suffix string
 
 param haikuModel string
@@ -53,21 +52,9 @@ resource account 'Microsoft.CognitiveServices/accounts@2025-10-01-preview' = {
   }
   properties: {
     customSubDomainName: accountName
-    allowProjectManagement: true
     publicNetworkAccess: 'Enabled'
     disableLocalAuth: false
   }
-}
-
-resource project 'Microsoft.CognitiveServices/accounts/projects@2025-10-01-preview' = {
-  parent: account
-  name: projectName
-  location: location
-  tags: tags
-  identity: {
-    type: 'SystemAssigned'
-  }
-  properties: {}
 }
 
 // Role assignment is declared BEFORE the model deployments so each
@@ -109,7 +96,6 @@ resource haikuDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-
     raiPolicyName: 'Microsoft.DefaultV2'
   }
   dependsOn: [
-    project
     cognitiveServicesUserAssignment
   ]
 }
@@ -139,7 +125,6 @@ resource sonnetDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025
   // 409s on concurrent create. The role assignment is listed too so the
   // first inference call after `azd up` doesn't hit RBAC propagation lag.
   dependsOn: [
-    project
     haikuDeployment
     cognitiveServicesUserAssignment
   ]
@@ -167,14 +152,12 @@ resource opusDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-1
     raiPolicyName: 'Microsoft.DefaultV2'
   }
   dependsOn: [
-    project
     sonnetDeployment
     cognitiveServicesUserAssignment
   ]
 }
 
 output claudeBaseUrl string = 'https://${account.name}.services.ai.azure.com/anthropic'
-output foundryProjectEndpoint string = 'https://${account.name}.services.ai.azure.com/api/projects/${project.name}'
 output foundryAccountName string = account.name
 output haikuDeploymentName string  = haikuDeploymentNameVar
 output sonnetDeploymentName string = sonnetDeploymentNameVar

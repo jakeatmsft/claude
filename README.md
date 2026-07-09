@@ -26,7 +26,7 @@ description: Deploy Claude models in Microsoft Foundry using one CLI command wit
 
 Ships in both **Bicep** and **Terraform**. Works in the cloud (GitHub Codespaces) or on your laptop.
 
-![Architecture: azd up provisions a Foundry account, project, and Claude deployments; the postprovision hook configures the local workspace so the Python SDK and Claude Code CLI both call the deployment via Entra ID.](./docs/img/architecture.png)
+![Architecture: azd up provisions a Foundry account and Claude deployments; the postprovision hook configures the local workspace so the Python SDK and Claude Code CLI both call the deployment via Entra ID.](./docs/img/architecture.png)
 
 > [!IMPORTANT]
 > By running `azd up` you accept Anthropic's commercial terms for Claude. Three short attestation fields (`CLAUDE_ORGANIZATION_NAME`, `CLAUDE_COUNTRY_CODE`, `CLAUDE_INDUSTRY`) are sent to Anthropic with every request and must match your real organization. **[Read the Terms of use](#terms-of-use) before you deploy.**
@@ -252,7 +252,7 @@ If the Anthropic SDK ever accepts a callable for `auth_token`, this shim becomes
 <details>
 <summary><strong>Claude Code CLI</strong> &mdash; optional agentic CLI against the same deployment</summary>
 
-After `azd up` finishes, the postprovision hook writes a project-scoped activator file. Source it once per shell:
+After `azd up` finishes, the postprovision hook writes a workspace-scoped activator file. Source it once per shell:
 
 ```powershell
 . ./claude-code.env.ps1     # PowerShell. macOS/Linux: source ./claude-code.env.sh
@@ -356,7 +356,7 @@ Rows marked **Attest** below are the three `modelProviderData` fields sent to An
 
 After `azd up` succeeds, the **postprovision** hook ([`scripts/configure-claude-code.ps1`](./scripts/configure-claude-code.ps1), with [`configure-claude-code.sh`](./scripts/configure-claude-code.sh) as a POSIX fallback) configures [Claude Code](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/configure-claude-code) for the freshly-deployed Foundry resource. It does four things:
 
-1. Writes a project-scoped activator at the repo root (`claude-code.env.ps1` and `claude-code.env.sh`, both gitignored) containing the [environment variables](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/configure-claude-code?tabs=bash#configure-claude-code-for-foundry) Claude Code expects:
+1. Writes a workspace-scoped activator at the repo root (`claude-code.env.ps1` and `claude-code.env.sh`, both gitignored) containing the [environment variables](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/configure-claude-code?tabs=bash#configure-claude-code-for-foundry) Claude Code expects:
    - `CLAUDE_CODE_USE_FOUNDRY=1`
    - `ANTHROPIC_FOUNDRY_RESOURCE=<your-foundry-account-name>`
    - One `ANTHROPIC_DEFAULT_<FAMILY>_MODEL=<deployment-name>` per deployed family (`HAIKU` / `SONNET` / `OPUS`). Only the families you actually deployed get a line.
@@ -490,8 +490,7 @@ python src/hello_claude_apikey.py
 <details>
 <summary><strong>What gets deployed</strong></summary>
 
-- **Microsoft Foundry** account (`Microsoft.CognitiveServices/accounts`, kind `AIServices`, SKU `S0`, `allowProjectManagement = true`)
-- **Foundry project**
+- **Microsoft Foundry** account (`Microsoft.CognitiveServices/accounts`, kind `AIServices`, SKU `S0`)
 - One **Claude deployment per requested family** (`GlobalStandard`, with the required `modelProviderData` block) &mdash; set `CLAUDE_HAIKU_MODEL` / `CLAUDE_SONNET_MODEL` / `CLAUDE_OPUS_MODEL` to control which families. Sonnet/Opus deployments chain on the prior to avoid Foundry's per-account 409s on concurrent create.
 - *Optional* RBAC: a single `Cognitive Services User` assignment on the Foundry account for the deploying principal (set `ASSIGN_RBAC=true`). This is the [least-privilege role the MS Learn doc recommends](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/how-to/configure-entra-id?tabs=python&pivots=ai-foundry-portal#for-making-authenticated-api-calls) for keyless inference &mdash; it grants exactly the `Microsoft.CognitiveServices/accounts/MaaS/*` data action this template's runtime needs and nothing else. If you want broader access (project-scoped APIs, agents, etc.), grant `Foundry User` or `Azure AI Developer` yourself afterwards &mdash; see the [permissions matrix](#required-permissions) below.
   - **Heads up:** without this (or a manual post-deploy grant), the Python SDK and `claude` CLI will return `401 PermissionDenied` even though `azd up` succeeded. See [Granting data-plane roles after `azd up`](#granting-data-plane-roles-after-azd-up).
@@ -720,7 +719,7 @@ az cognitiveservices usage list -l <region> --query "[?contains(name.value,'clau
 
 Claude deployments fail with `AnthropicOrganizationCreationException` if `modelProviderData` is missing. **`industry` must be lowercase** to match the Foundry portal dropdown.
 
-The Terraform variant uses `azapi_resource` for both the Foundry account and the Claude deployment, because the native `azurerm_cognitive_account` / `azurerm_cognitive_deployment` resources do not yet expose `allowProjectManagement` or `modelProviderData` ([tracked here](https://github.com/hashicorp/terraform-provider-azurerm/issues/31140)). The Bicep variant uses native resources at API version `2025-10-01-preview`, which support both.
+The Terraform variant uses `azapi_resource` for both the Foundry account and the Claude deployment so it stays on the same preview API surface as the Bicep variant, and because the native `azurerm_cognitive_deployment` resource still does not expose `modelProviderData` ([tracked here](https://github.com/hashicorp/terraform-provider-azurerm/issues/31140)). The Bicep variant uses native resources at API version `2025-10-01-preview`, which support the required deployment properties directly.
 
 </details>
 
@@ -730,7 +729,6 @@ The Terraform variant uses `azapi_resource` for both the Foundry account and the
 | Symptom | Fix |
 |---|---|
 | `AnthropicOrganizationCreationException` / `AnthropicOrganizationCreationFailed` | `modelProviderData` is missing or malformed. Ensure all three of `organizationName`, `countryCode`, `industry` are set, and that `industry` is lowercase. |
-| `Project can only be created under AIServices Kind account with allowProjectManagement set to true` | Account property missing. Both variants here set it; check you didn't downgrade the API version. |
 | `404 Not Found` on inference | Base URL must end in `/anthropic` &mdash; `https://<resource>.services.ai.azure.com/anthropic`. |
 | `401 Unauthorized` | Token scope must be `https://ai.azure.com/.default`. Re-run `az login`. |
 | `401 Unauthorized` after ~1 hour of running | The Entra ID token captured at startup has expired. The plain `Anthropic` client doesn't auto-refresh &mdash; see the [long-running token refresh shim](#advanced-long-running-processes-auto-refreshing-the-entra-id-token) for [src/hello_claude_token_refresh.py](./src/hello_claude_token_refresh.py), which uses an `AnthropicIdentity` shim to refresh per request. |
@@ -738,7 +736,7 @@ The Terraform variant uses `azapi_resource` for both the Foundry account and the
 | `Region not available` | Deploy to `eastus2` or `swedencentral` (or `westus2` for opus-only). |
 | Subscription can't deploy Claude | Confirm subscription eligibility per the [official docs](https://learn.microsoft.com/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude#prerequisites). The [preprovision preflight](#preprovision-preflight-marketplace-catalog--quota) warns about this before `azd up` calls the RP. |
 | `Error occurred when subscribing to Marketplace: Marketplace Subscription purchase eligibility check failed` | Your subscription cannot purchase the Anthropic offer (no entitlement, sandbox sub, paid-offer policy denial, etc.). Either use a subscription with Claude-on-Foundry entitlement, or pre-accept the agreement explicitly with `az term accept --publisher anthropic --product anthropic-<model>-offer --plan anthropic-<model>-plan-new`. |
-| Opaque `400 715-123420 "An error occurred. Please reach out to support for additional assistance."` on the Terraform deployment step (RG / Foundry account / project all succeed) | **Insufficient quota.** Terraform's `azapi_resource` bypasses ARM preflight validation and the Cognitive Services RP returns this generic code instead of `InsufficientQuota`. **Fix:** check `az cognitiveservices usage list -l <region> --query "[?contains(name.value,'<model>')]"` &mdash; if `currentValue + requestedCapacity > limit`, lower `CLAUDE_SONNET_CAPACITY` / `CLAUDE_HAIKU_CAPACITY` / `CLAUDE_OPUS_CAPACITY` via `azd env set`, delete unused deployments to free capacity, or request a quota increase in the Foundry portal. **Also check for soft-deleted accounts** still holding quota &mdash; see [Free quota held by soft-deleted accounts](#free-quota-held-by-soft-deleted-accounts). To confirm it really is quota, re-run on the Bicep variant which surfaces the clearer `InsufficientQuota` error. |
+| Opaque `400 715-123420 "An error occurred. Please reach out to support for additional assistance."` on the Terraform deployment step (RG / Foundry account succeed; model deployment fails) | **Insufficient quota.** Terraform's `azapi_resource` bypasses ARM preflight validation and the Cognitive Services RP returns this generic code instead of `InsufficientQuota`. **Fix:** check `az cognitiveservices usage list -l <region> --query "[?contains(name.value,'<model>')]"` &mdash; if `currentValue + requestedCapacity > limit`, lower `CLAUDE_SONNET_CAPACITY` / `CLAUDE_HAIKU_CAPACITY` / `CLAUDE_OPUS_CAPACITY` via `azd env set`, delete unused deployments to free capacity, or request a quota increase in the Foundry portal. **Also check for soft-deleted accounts** still holding quota &mdash; see [Free quota held by soft-deleted accounts](#free-quota-held-by-soft-deleted-accounts). To confirm it really is quota, re-run on the Bicep variant which surfaces the clearer `InsufficientQuota` error. |
 | Bicep: `InsufficientQuota: This operation require N new capacity in quota Tokens Per Minute (thousands) - Claude <model>, which is bigger than the current available capacity X. The current quota usage is U and the quota limit is L.` | Same root cause as `715-123420` above, just with a clear message because Bicep goes through ARM preflight. Lower the capacity env var(s) or free up quota. |
 | `GatewayTimeout: The gateway did not receive a response from 'Microsoft.CognitiveServices' within the specified time period.` during the model deployment step, often with the deployment stuck in `Creating` | **ARM-layer poll timeout on a slow long-running operation, not a real failure.** The Cognitive Services RP keeps working after ARM gives up; the model deployment can still reach `Succeeded` minutes later. First-time Claude provisioning on a fresh resource is the slowest combination, and times vary by region and family. **Do not re-run `azd up` blindly &mdash; it can collide with the in-flight LRO.** Check the server-side state first: run `pwsh -File scripts/verify-claude-code.ps1 -WaitForDeployment` (POSIX: `bash scripts/verify-claude-code.sh --wait-for-deployment`), which polls `az cognitiveservices account deployment list` and waits while any deployment is still `Creating`. Or check directly: `az cognitiveservices account deployment list -g <rg> -n <foundry-account>`. If state is already `Succeeded`, run `azd env refresh` to repopulate outputs and you're done. |
 | Preflight: `Marketplace offer ... not found` | `CLAUDE_MODEL_NAME` is misspelled, the model isn't in the Anthropic-on-Foundry catalog yet, or Anthropic changed the plan-name convention. |

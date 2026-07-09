@@ -112,7 +112,6 @@ Match the customer's exact error string to a row. Verify the diagnostic command 
 | Error fingerprint | Root cause | Diagnostic | Fix |
 |---|---|---|---|
 | `AnthropicOrganizationCreationException` / `AnthropicOrganizationCreationFailed` | One of the three attestation fields is missing or `CLAUDE_INDUSTRY` is uppercase. | `azd env get-values \| Select-String CLAUDE_ORGANIZATION_NAME, CLAUDE_COUNTRY_CODE, CLAUDE_INDUSTRY` | `azd env set CLAUDE_INDUSTRY technology` (lowercase). Re-run `azd up`. |
-| `Project can only be created under AIServices Kind account with allowProjectManagement set to true` | Account property got downgraded. | Check the IaC didn't get edited to remove `allowProjectManagement`. | Restore the template; re-deploy. |
 | `Marketplace offer ... not found` (from preflight, exit 4) | `CLAUDE_*_MODEL` value is misspelled or that SKU isn't in the catalog. | `./Get-ClaudeCatalog.ps1` and grep the family. | Set `CLAUDE_<FAMILY>_MODEL` to a name from the catalog. |
 | `Quota insufficient` (from preflight, exit 6) | Requested capacity + existing usage > per-region limit. | `az cognitiveservices usage list -l <region> --query "[?contains(name.value,'claude-')]"` | Lower `CLAUDE_<FAMILY>_CAPACITY`, free quota (see soft-delete row), or request a quota bump in the Foundry portal. |
 | Bicep: `InsufficientQuota: This operation require N new capacity in quota Tokens Per Minute (thousands) - Claude <model>` | Same as above; Bicep gets the clear message because it goes through ARM preflight. | Same diagnostic. | Same fix. |

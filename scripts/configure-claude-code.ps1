@@ -7,7 +7,7 @@
     Reads the per-family deployment outputs from `azd env get-values` and
     wires up Claude Code so the user can immediately run `claude`:
 
-      1. Writes a project-scoped activator at the repo root:
+      1. Writes a workspace-scoped activator at the repo root:
              claude-code.env.ps1   (PowerShell)
              claude-code.env.sh    (Bash / WSL)
          containing ANTHROPIC_DEFAULT_<FAMILY>_MODEL for each non-empty

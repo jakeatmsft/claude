@@ -9,8 +9,6 @@
 // ----------------------------------------------------------------------------
 // `modelProviderData` is REQUIRED for Claude deployments. `industry`
 // MUST be lowercase to match the Foundry portal dropdown.
-// `allowProjectManagement = true` is required to create projects under the
-// Foundry account.
 //
 // Per-family deployment mode:
 //   Set any of CLAUDE_HAIKU_MODEL / CLAUDE_SONNET_MODEL / CLAUDE_OPUS_MODEL to
@@ -91,7 +89,6 @@ var tags = {
 }
 var suffix = take(uniqueString(subscription().id, environmentName), 8)
 var accountName = '${baseName}-foundry-${suffix}'
-var projectName = '${baseName}-proj-${suffix}'
 
 // Resolve effective per-family models. If no family vars are set, route the
 // legacy modelName into its matching slot for back-compat.
@@ -121,7 +118,6 @@ module foundry 'foundry.bicep' = {
     location: location
     tags: tags
     accountName: accountName
-    projectName: projectName
     suffix: suffix
     haikuModel: effectiveHaikuModel
     sonnetModel: effectiveSonnetModel
@@ -139,7 +135,6 @@ module foundry 'foundry.bicep' = {
 }
 
 output CLAUDE_BASE_URL string = foundry.outputs.claudeBaseUrl
-output FOUNDRY_PROJECT_ENDPOINT string = foundry.outputs.foundryProjectEndpoint
 output FOUNDRY_ACCOUNT_NAME string = foundry.outputs.foundryAccountName
 output AZURE_RESOURCE_GROUP string = rg.name
 output AZURE_LOCATION string = location
